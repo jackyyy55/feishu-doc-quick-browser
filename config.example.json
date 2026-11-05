@@ -1,0 +1,16 @@
+{
+ "doc_url": "https://xxx.feishu.cn/docx/你的文档token",
+ "on_top": true,
+ "width": 889,
+ "height": 1042,
+ "x": null,
+ "y": null,
+ "collapsed": false,
+ "geom_unit": "px",
+ "alpha_in": 100,
+ "alpha_out": 70,
+ "dock_side": "",
+ "dock_px": 20,
+ "anim_dock_ms": 160,
+ "anim_alpha_ms": 300
+}

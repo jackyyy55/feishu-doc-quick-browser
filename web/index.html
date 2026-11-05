@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>飞书文档快速浏览</title>
+<style>
+  :root{
+    --ink:#1f2329;
+    --ink-3:#8f959e;
+    --line:rgba(31,35,41,.09);
+    --accent:#3370ff;
+    --accent-soft:rgba(51,112,255,.10);
+    --danger:#d83931;
+    --bg:#fdfdfe;
+    --strip:18px;   /* 贴边缩进后露出的条宽，由主程序下发 */
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;background:#fff;overflow:hidden;}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;
+    color:var(--ink);font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased;
+    user-select:none;
+  }
+  /* 半透明由主程序在系统层做整窗透明（真实透出桌面）。
+     页面里不要再加 opacity，否则只会变成"白底更白"而不是透明。 */
+  #stage{height:100%;min-height:0;}
+  .card{
+    width:100%;height:100%;display:flex;flex-direction:column;
+    background:var(--bg);border:1px solid var(--line);overflow:hidden;min-height:0;
+  }
+  header{
+    display:flex;align-items:center;gap:6px;padding:10px 8px 8px 14px;
+    flex:0 0 auto;border-bottom:1px solid var(--line);cursor:move;
+  }
+  body.dragging{ cursor:move !important; }
+  .brand{display:flex;align-items:center;gap:8px;flex:1;min-width:0;}
+  .dot{width:7px;height:7px;border-radius:50%;background:#34c724;flex:0 0 auto;}
+  .dot.sync{background:var(--accent);animation:pulse 1s infinite;}
+  .dot.err{background:var(--danger);}
+  @keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+  .brand b{font-size:14px;font-weight:600;white-space:nowrap;}
+  .brand span.docname{
+    font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;cursor:move;
+  }
+  .tools{display:flex;gap:1px;flex:0 0 auto;}
+  .tools button{
+    width:25px;height:25px;border:0;border-radius:6px;background:transparent;color:var(--ink-3);
+    font-size:13px;line-height:1;cursor:pointer;display:grid;place-items:center;font-family:inherit;
+  }
+  .tools button:not(:disabled):hover{background:rgba(31,35,41,.07);color:var(--ink);}
+  .tools button:disabled{opacity:.32;}
+  .tools svg{display:block;}
+  .tools button.on{color:var(--accent);background:var(--accent-soft);}
+  /* 内容区：直接嵌飞书文档网页，所有编辑能力和飞书完全一致 */
+  #docwrap{
+    flex:1 1 auto;min-height:0;position:relative;background:#fff;overflow:hidden;
+  }
+  #views{position:absolute;inset:0;}
+  #views iframe{display:none;position:absolute;inset:0;border:0;background:#fff;width:100%;height:100%;}
+  #views iframe.on{display:block;}
+  .banner{
+    position:fixed;left:14px;right:14px;bottom:14px;background:rgba(216,57,49,.96);color:#fff;
+    font-size:11.5px;line-height:1.5;padding:7px 10px;border-radius:8px;opacity:0;pointer-events:none;
+    transform:translateY(4px);transition:.2s;z-index:9;
+  }
+  .banner.show{opacity:1;transform:none;}
+  body.collapsed #tabbar,body.collapsed #docwrap{display:none;}
+  /* 设置面板（齿轮） */
+  .panel{
+    position:fixed;top:42px;right:8px;z-index:20;width:256px;background:#fff;
+    border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 26px rgba(15,17,21,.16);
+    padding:10px 12px 12px;display:none;
+  }
+  .panel.show{display:block;}
+  .panel h4{font-size:12px;font-weight:600;margin:2px 0 8px;color:var(--ink);}
+  .panel .row{
+    display:grid;grid-template-columns:68px minmax(0,1fr) 40px;align-items:center;
+    gap:6px;margin-bottom:8px;font-size:11.5px;color:var(--ink-3);
+  }
+  .panel .row span{white-space:nowrap;}
+  .panel .row b{text-align:right;color:var(--accent);font-weight:600;white-space:nowrap;}
+  .panel input[type=range]{
+    width:100%;min-width:0;accent-color:var(--accent);height:16px;display:block;
+  }
+  /* 开关（开机自启） */
+  .switch{position:relative;display:inline-flex;align-items:center;justify-self:start;width:34px;height:18px;cursor:pointer;}
+  .switch input{position:absolute;opacity:0;width:0;height:0;}
+  .switch i{width:34px;height:18px;border-radius:9px;background:rgba(31,35,41,.18);transition:background .18s;position:relative;}
+  .switch i::after{
+    content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.22);transition:transform .18s;
+  }
+  .switch input:checked + i{background:var(--accent);}
+  .switch input:checked + i::after{transform:translateX(16px);}
+  /* 文档分页条（浏览器式标签）：点内容里的飞书链接开新分页 */
+  #tabbar{
+    display:flex;align-items:flex-end;gap:2px;padding:5px 6px 0;
+    flex:0 0 auto;overflow-x:auto;overflow-y:hidden;border-bottom:1px solid var(--line);
+    scrollbar-width:none;background:var(--bg);
+  }
+  #tabbar::-webkit-scrollbar{display:none;}
+  .tab{
+    display:flex;align-items:center;gap:4px;max-width:170px;min-width:0;
+    padding:4px 6px 4px 10px;border:1px solid transparent;border-bottom:0;
+    border-radius:8px 8px 0 0;font-size:11.5px;color:var(--ink-3);
+    cursor:pointer;flex:0 0 auto;position:relative;top:1px;
+  }
+  .tab span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .tab.on{background:#fff;border-color:var(--line);color:var(--ink);font-weight:600;}
+  .tab:not(.on):hover{background:rgba(31,35,41,.05);color:var(--ink);}
+  .tab .x{
+    width:15px;height:15px;border:0;border-radius:4px;background:transparent;
+    color:var(--ink-3);font-size:10px;line-height:1;cursor:pointer;flex:0 0 auto;
+    display:grid;place-items:center;font-family:inherit;padding:0;
+  }
+  .tab .x:hover{background:rgba(31,35,41,.1);color:var(--danger);}
+  /* 每个分页一个独立 iframe：切走时隐藏不销毁，回来滚动位置还在 */
+  /* 贴边缩进后露出的拉手：放在「真正露在屏幕上的那条边」——
+     贴左 → 露右边缘；贴右 → 露左边缘；贴顶 → 露下边缘。
+     只在缩进状态（body.docked-hidden）出现，此时主程序把整窗设为不透明，
+     所以拉手不会被半透明冲淡。 */
+  #dockbar{
+    position:fixed;display:none;z-index:30;background:var(--bg);
+    align-items:center;justify-content:center;
+  }
+  body.docked-hidden.docked-left  #dockbar{display:flex;right:0;top:0;bottom:0;width:calc(var(--strip) + 2px);box-shadow:-3px 0 10px rgba(15,17,21,.14);}
+  body.docked-hidden.docked-right #dockbar{display:flex;left:0;top:0;bottom:0;width:calc(var(--strip) + 2px);box-shadow:3px 0 10px rgba(15,17,21,.14);}
+  body.docked-hidden.docked-top   #dockbar{display:flex;bottom:0;left:0;right:0;height:calc(var(--strip) + 2px);box-shadow:0 -3px 10px rgba(15,17,21,.14);}
+  .grip{
+    display:flex;align-items:center;justify-content:center;flex:0 0 auto;
+    background:linear-gradient(180deg,#4a83ff,#2b5fd9);border-radius:7px;
+    box-shadow:0 1px 4px rgba(51,112,255,.45);
+  }
+  body.docked-left .grip,body.docked-right .grip{width:calc(var(--strip) - 6px);height:96px;}
+  body.docked-top .grip{height:calc(var(--strip) - 6px);width:96px;background:linear-gradient(90deg,#4a83ff,#2b5fd9);}
+  #dockbar svg{display:block;}
+  body.docked-right .grip svg{transform:rotate(180deg);}
+  body.docked-top .grip svg{transform:rotate(90deg);}
+  /* iframe 盖住了内容区，网页内部的鼠标事件传不到外壳，所以用透明感应条做拖边缩放 */
+  .rz{position:fixed;z-index:5;background:transparent;}
+  .rz.t{left:10px;right:10px;top:0;height:4px;cursor:ns-resize;}
+  .rz.b{left:10px;right:10px;bottom:0;height:6px;cursor:ns-resize;}
+  .rz.l{left:0;top:10px;bottom:10px;width:6px;cursor:ew-resize;}
+  .rz.r{right:0;top:10px;bottom:10px;width:6px;cursor:ew-resize;}
+  .rz.tl{left:0;top:0;width:12px;height:12px;cursor:nwse-resize;z-index:6;}
+  .rz.tr{right:0;top:0;width:12px;height:12px;cursor:nesw-resize;z-index:6;}
+  .rz.bl{left:0;bottom:0;width:12px;height:12px;cursor:nesw-resize;z-index:6;}
+  .rz.br{right:0;bottom:0;width:12px;height:12px;cursor:nwse-resize;z-index:6;}
+  body.collapsed .rz.b,body.collapsed .rz.l,body.collapsed .rz.r,
+  body.collapsed .rz.bl,body.collapsed .rz.br{display:none;}
+  #loading{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#fff;color:var(--ink-3);font-size:12.5px;z-index:4;transition:opacity .25s;
+  }
+  #loading.hide{opacity:0;pointer-events:none;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="card">
+    <header>
+      <div class="brand">
+        <span class="dot" id="dot"></span>
+        <b>飞书文档快速浏览</b>
+        <span class="docname" id="docname" title="当前文档"></span>
+      </div>
+      <div class="tools">
+        <button id="btn-refresh" title="刷新页面"><svg viewBox="0 0 16 16" width="13" height="13"><path d="M13.1 7A5.4 5.4 0 1 0 13 9.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M13.5 3v3.9H9.6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="btn-settings" title="设置（选中 / 空置透明度）"><svg viewBox="0 0 24 24" width="11" height="11"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="2.3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="btn-top" title="窗口置顶"><svg viewBox="0 0 16 16" width="13" height="13"><path d="M9.6 2.3l4.1 4.1-1.7.5-2.3 2.3-.5 2.5-4.4-4.4 2.5-.5 2.3-2.3z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M6.1 9.9l-3.2 3.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+        <button id="btn-collapse" title="收起 / 展开">—</button>
+        <button id="btn-close" title="关闭">✕</button>
+      </div>
+    </header>
+    <div id="tabbar"></div>
+    <div id="docwrap">
+      <div id="views"></div>
+      <div id="loading">正在加载飞书文档…</div>
+    </div>
+  </div>
+</div>
+<div id="dockbar"><span class="grip"><svg viewBox="0 0 9 12" width="8" height="11"><path d="M2.2 1.8l4.6 4.2-4.6 4.2" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>
+<div class="panel" id="settings">
+  <h4>设置</h4>
+  <div class="row"><span>选中透明度</span><input type="range" id="set-in" min="30" max="100" step="5"><b id="v-in"></b></div>
+  <div class="row"><span>空置透明度</span><input type="range" id="set-out" min="20" max="100" step="5"><b id="v-out"></b></div>
+  <div class="row"><span>透明时长</span><input type="range" id="set-alpha" min="0" max="800" step="20"><b id="v-alpha"></b></div>
+  <div class="row"><span>收起时长</span><input type="range" id="set-dock" min="0" max="600" step="20"><b id="v-dock"></b></div>
+  <div class="row"><span>开机自启</span><label class="switch"><input type="checkbox" id="set-auto"><i></i></label><b></b></div>
+</div>
+<div class="rz t" data-edge="top"></div>
+<div class="rz b" data-edge="bottom"></div>
+<div class="rz l" data-edge="left"></div>
+<div class="rz r" data-edge="right"></div>
+<div class="rz tl" data-edge="topleft"></div>
+<div class="rz tr" data-edge="topright"></div>
+<div class="rz bl" data-edge="bottomleft"></div>
+<div class="rz br" data-edge="bottomright"></div>
+<div class="banner" id="banner"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let S = null;
+
+// ---- 文档分页（浏览器式标签）：点内容里的飞书链接开新分页，点分页切换
+let TABS = [];       // [{url, ifr, loaded}]
+let tabAct = -1;
+let TITLES = {};     // 域名+路径 → 标题（主程序后台取到后回填）
+function tkey(u){
+  try{ const o = new URL(u); return o.hostname + o.pathname.replace(/\/+$/,""); }
+  catch(e){ return u; }
+}
+
+let saveTabsT = null;
+function saveTabs(){
+  clearTimeout(saveTabsT);
+  saveTabsT = setTimeout(()=>{
+    call("/api/recent", {list: TABS.map(t=>t.url).slice(-20)}).catch(()=>{});
+  }, 400);
+}
+
+function tabLabel(url){ return TITLES[tkey(url)] || urlLabel(url); }
+
+function renderTabs(){
+  const bar = $("#tabbar");
+  bar.innerHTML = "";
+  TABS.forEach((t, i)=>{
+    const d = document.createElement("div");
+    d.className = "tab" + (i === tabAct ? " on" : "");
+    const s = document.createElement("span");
+    s.textContent = tabLabel(t.url);
+    s.title = t.url;
+    d.appendChild(s);
+    if(TABS.length > 1){
+      const x = document.createElement("button");
+      x.className = "x"; x.textContent = "✕"; x.title = "关闭此分页";
+      x.onclick = (e)=>{ e.stopPropagation(); closeTab(i); };
+      d.appendChild(x);
+    }
+    d.onclick = ()=>activateTab(i);
+    bar.appendChild(d);
+  });
+  bar.scrollLeft = bar.scrollWidth;
+}
+
+function makeIfr(){
+  const ifr = document.createElement("iframe");
+  ifr.title = "飞书文档";
+  ifr.addEventListener("load", ()=>{
+    if(TABS[tabAct] && TABS[tabAct].ifr === ifr) $("#loading").classList.add("hide");
+  });
+  $("#views").appendChild(ifr);
+  return ifr;
+}
+
+function activateTab(i){
+  if(i < 0 || i >= TABS.length) return;
+  tabAct = i;
+  const t = TABS[i];
+  if(!t.loaded){ t.ifr.src = t.url; t.loaded = true; }
+  TABS.forEach((x, j)=>x.ifr.classList.toggle("on", j === i));
+  $("#docname").textContent = tabLabel(t.url);
+  $("#loading").classList.add("hide");
+  renderTabs();
+  call("/api/nav-doc", {url: t.url});   // 主程序记住当前文档，重启后还开它
+  saveTabs();
+}
+
+function closeTab(i){
+  if(TABS.length <= 1) return;          // 至少留一个分页
+  TABS[i].ifr.remove();
+  TABS.splice(i, 1);
+  if(tabAct === i) activateTab(Math.min(i, TABS.length - 1));
+  else { if(tabAct > i) tabAct--; renderTabs(); }
+  saveTabs();
+}
+
+// 打开文档：已有同文档分页 → 直接切过去；没有 → 新开一个分页
+// （内容里点飞书链接由主程序回调到这里 → "弹一个新分页"）
+function loadDoc(url){
+  if(!url) return;
+  const k = tkey(url);
+  const idx = TABS.findIndex(t=>tkey(t.url) === k);
+  if(idx >= 0){
+    if(idx === tabAct && TABS[idx].url === url) return;   // 轮询对齐，无需动作
+    TABS[idx].url = url;
+    activateTab(idx);
+    return;
+  }
+  const ifr = makeIfr();
+  ifr.src = url;
+  if(TABS.length >= 20){                                  // 上限 20 个分页
+    TABS[0].ifr.remove(); TABS.shift();
+    if(tabAct > -1) tabAct--;
+  }
+  TABS.push({url, ifr, loaded:true});
+  $("#loading").classList.remove("hide");
+  $("#loading").textContent = "正在加载飞书文档…";
+  activateTab(TABS.length - 1);
+}
+
+// ---- 窗口边缘拖拽缩放（frameless 窗口没有系统边框，这里自己实现）
+// 注意：内容区被跨域 iframe 覆盖，鼠标事件落不到本页，所以用透明感应条来接鼠标
+document.querySelectorAll(".rz").forEach(el=>{
+  el.addEventListener("mousedown", (ev) => {
+    if(ev.button !== 0) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    call("/api/resize-start", {edge: el.dataset.edge});
+  });
+});
+
+// ---- 只在顶部状态条上拖动窗口
+(function(){
+  const bar = document.querySelector("header");
+  if(!bar) return;
+  bar.addEventListener("mousedown", (ev) => {
+    if(ev.button !== 0) return;
+    if(ev.target.closest("button,input,textarea,a,.panel")) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    document.body.classList.add("dragging");
+    call("/api/drag-start", {}).then(() => {}).catch(() => {});
+  });
+  window.addEventListener("mouseup", () => document.body.classList.remove("dragging"));
+  window.addEventListener("blur", () => document.body.classList.remove("dragging"));
+  window.addEventListener("mousemove", (ev) => {
+    if(ev.buttons === 0) document.body.classList.remove("dragging");
+  });
+})();
+
+async function call(route, body){
+  try{
+    const r = await fetch(route, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(body || {})
+    });
+    return await r.json();
+  }catch(e){
+    return {ok:false, error:"本地服务连接失败，请重启贴片"};
+  }
+}
+
+/* DPI 缩放已由主程序在 WebView2 控制器层校准（视口 = 窗口物理像素），
+   页面按 100% 铺满即可，不要再做 zoom 反向缩放。 */
+function fit(){}
+
+function banner(msg){
+  const b = $("#banner");
+  if(!msg){ b.classList.remove("show"); return; }
+  b.textContent = msg; b.classList.add("show");
+  clearTimeout(banner._t);
+  banner._t = setTimeout(()=>b.classList.remove("show"), 6000);
+}
+
+function setDot(cls){ $("#dot").className = "dot" + (cls ? " "+cls : ""); }
+
+window.renderState = function(state){
+  if(!state) return;
+  S = state;
+  TITLES = state.doc_titles || TITLES;
+  // 重启恢复：把上次保存的分页先建出来（懒加载，切到哪个再真正加载哪个）
+  if(!TABS.length && state.doc_recent && state.doc_recent.length){
+    state.doc_recent.forEach(u=>{
+      if(!TABS.some(t=>tkey(t.url) === tkey(u)))
+        TABS.push({url: u, ifr: makeIfr(), loaded:false});
+    });
+  }
+  setDot(state.error ? "err" : "");
+  $("#btn-top").classList.toggle("on", !!state.on_top);
+  document.body.classList.toggle("collapsed", !!state.collapsed);
+  $("#btn-collapse").textContent = state.collapsed ? "+" : "—";
+  // 贴边状态（决定拉手贴在哪条边、朝向）
+  document.body.style.setProperty("--strip", (state.dock_strip || 18) + "px");
+  document.body.classList.remove("docked-left","docked-right","docked-top");
+  if(state.dock_side) document.body.classList.add("docked-"+state.dock_side);
+  else document.body.classList.remove("docked-hidden");
+  banner(state.error || "");
+  loadDoc(state.doc_url);
+};
+
+// ---- 设置面板（齿轮）：移入/移出透明度
+(function(){
+  const panel = $("#settings");
+  let t = null;
+  function sync(){
+    if(!S) return;
+    $("#set-in").value = S.alpha_in;  $("#v-in").textContent = S.alpha_in + "%";
+    $("#set-out").value = S.alpha_out; $("#v-out").textContent = S.alpha_out + "%";
+    const am = S.anim_alpha_ms == null ? 300 : S.anim_alpha_ms;
+    const dm = S.anim_dock_ms == null ? 160 : S.anim_dock_ms;
+    $("#set-alpha").value = am;
+    $("#v-alpha").textContent = am ? am + "ms" : "关";
+    $("#set-dock").value = dm;
+    $("#v-dock").textContent = dm ? dm + "ms" : "关";
+    $("#set-auto").checked = !!S.autostart;
+  }
+  function push(){
+    clearTimeout(t);
+    t = setTimeout(async ()=>{
+      S = await call("/api/settings", {
+        alpha_in: +$("#set-in").value,
+        alpha_out: +$("#set-out").value,
+        anim_alpha_ms: +$("#set-alpha").value,
+        anim_dock_ms: +$("#set-dock").value,
+        autostart: $("#set-auto").checked
+      });
+      sync();
+    }, 120);
+  }
+  $("#btn-settings").addEventListener("mousedown", (e)=>e.stopPropagation());
+  $("#btn-settings").onclick = (e)=>{
+    e.stopPropagation();
+    sync();
+    panel.classList.toggle("show");
+  };
+  document.addEventListener("mousedown", (e)=>{
+    if(!e.target.closest("#settings") && !e.target.closest("#btn-settings"))
+      panel.classList.remove("show");
+  });
+  ["#set-in","#set-out"].forEach(id=>{
+    $(id).addEventListener("input", ()=>{
+      $("#v-in").textContent = $("#set-in").value + "%";
+      $("#v-out").textContent = $("#set-out").value + "%";
+      push();
+    });
+  });
+  ["#set-alpha","#set-dock"].forEach(id=>{
+    $(id).addEventListener("input", ()=>{
+      const a = +$("#set-alpha").value, d = +$("#set-dock").value;
+      $("#v-alpha").textContent = a ? a + "ms" : "关";
+      $("#v-dock").textContent = d ? d + "ms" : "关";
+      push();
+    });
+  });
+  $("#set-auto").addEventListener("change", push);
+})();
+
+$("#btn-refresh").onclick = () => {
+  const t = TABS[tabAct];
+  if(t){ $("#loading").classList.remove("hide"); t.ifr.src = t.url; }
+};
+$("#btn-top").onclick = async ()=>{ renderState(await call("/api/on-top", {flag: !(S&&S.on_top)})); };
+$("#btn-collapse").onclick = async ()=>{ renderState(await call("/api/collapse", {flag: !(S&&S.collapsed)})); };
+$("#btn-close").onclick = ()=> call("/api/close");
+
+// ---- 分页标签的兜底短标题（主程序取到真实标题前显示文档 id）
+function urlLabel(u){
+  try{
+    const o = new URL(u);
+    const seg = o.pathname.replace(/\/+$/,"").split("/").filter(Boolean);
+    const id = seg[seg.length-1] || o.hostname;
+    return id.length > 26 ? id.slice(0, 26) + "…" : id;
+  }catch(e){ return u.slice(0, 34); }
+}
+window.refreshDocTitle = (k, t)=>{
+  TITLES[k] = t;
+  renderTabs();
+  if(TABS[tabAct] && tkey(TABS[tabAct].url) === k) $("#docname").textContent = t;
+};
+
+async function loadState(){
+  const st = await call("/api/state");
+  if(st && st.ok !== undefined) renderState(st);
+}
+
+function boot(){
+  fit();
+  call("/api/boot").then(renderState).catch(()=>{});
+  setTimeout(loadState, 3000);
+  setInterval(loadState, 5000);   // 定期对齐贴边状态/设置（拖动后把手图标才能及时出现）
+}
+boot();
+</script>
+</body>
+</html>
