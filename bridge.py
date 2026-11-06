@@ -13,9 +13,13 @@ import threading
 import time
 from html import unescape
 
-# PyInstaller 打包后可写目录放 exe 旁边（资源目录无需用到）
-APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) \
-    else os.path.dirname(os.path.abspath(__file__))
+# 与 app.py 保持一致：打包后可写目录统一放 %APPDATA%\FeishuDocQuickBrowser
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.join(
+        os.environ.get("APPDATA") or os.path.expanduser("~"), "FeishuDocQuickBrowser"
+    )
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(APP_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 

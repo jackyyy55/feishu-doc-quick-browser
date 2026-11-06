@@ -48,14 +48,59 @@ except Exception:  # pragma: no cover
     Func = None
     Rectangle = None
 
-# PyInstaller 打包后：资源（web/）在 _MEIPASS 临时解包目录，可写文件（config/data）放 exe 旁边
+# PyInstaller 打包后：资源（web/）在 _MEIPASS 临时解包目录；
+# 可写文件（config/data）统一放 %APPDATA%\FeishuDocQuickBrowser，exe 目录保持干净，
+# exe 挪到任何位置配置都跟着走。开发模式（python app.py）仍用脚本所在目录。
 FROZEN = getattr(sys, "frozen", False)
 RES_DIR = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
-APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if FROZEN \
-    else os.path.dirname(os.path.abspath(__file__))
+if FROZEN:
+    APP_DIR = os.path.join(
+        os.environ.get("APPDATA") or os.path.expanduser("~"), "FeishuDocQuickBrowser"
+    )
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(RES_DIR, "web")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 DATA_DIR = os.path.join(APP_DIR, "data")
+
+
+def _migrate_legacy_writable():
+    """旧版本把 config.json / data 放在 exe 旁边：首次运行时搬到 APPDATA（只搬不删）。"""
+    if not FROZEN:
+        return
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if os.path.normcase(exe_dir) == os.path.normcase(APP_DIR):
+        return
+    import shutil
+
+    legacy_cfg = os.path.join(exe_dir, "config.json")
+    if os.path.isfile(legacy_cfg) and not os.path.exists(CONFIG_PATH):
+        try:
+            shutil.copy2(legacy_cfg, CONFIG_PATH)
+            _life_safe(f"已迁移配置 {legacy_cfg} -> {CONFIG_PATH}")
+        except OSError as e:
+            _life_safe(f"迁移配置失败（忽略，用默认配置）: {e}")
+    legacy_data = os.path.join(exe_dir, "data")
+    if os.path.isdir(legacy_data) and not os.path.exists(DATA_DIR):
+        try:
+            shutil.copytree(legacy_data, DATA_DIR)
+            _life_safe(f"已迁移数据 {legacy_data} -> {DATA_DIR}")
+        except OSError as e:
+            _life_safe(f"迁移数据失败（忽略，新建空数据目录）: {e}")
+
+
+def _life_safe(msg):
+    """迁移阶段 DATA_DIR 可能还没建，先保证目录再写日志。"""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(os.path.join(DATA_DIR, "life.log"), "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+    except OSError:
+        pass
+
+
+if FROZEN:
+    _migrate_legacy_writable()
 
 # 窗口标题（顶栏 / 任务栏 / 找窗口都认它；旧标题留作兼容，改名后旧进程也能被找到）
 WINDOW_TITLE = "飞书文档快速浏览"
