@@ -48,8 +48,12 @@ except Exception:  # pragma: no cover
     Func = None
     Rectangle = None
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(APP_DIR, "web")
+# PyInstaller 打包后：资源（web/）在 _MEIPASS 临时解包目录，可写文件（config/data）放 exe 旁边
+FROZEN = getattr(sys, "frozen", False)
+RES_DIR = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if FROZEN \
+    else os.path.dirname(os.path.abspath(__file__))
+WEB_DIR = os.path.join(RES_DIR, "web")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 DATA_DIR = os.path.join(APP_DIR, "data")
 
@@ -157,6 +161,9 @@ AUTOSTART_NAME = "FeishuLogWidget"
 
 
 def _autostart_cmd():
+    if FROZEN:
+        # 打包后自启就是 exe 本身（--noconsole，无黑窗）
+        return '"%s"' % sys.executable
     exe = sys.executable or "python.exe"
     pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
     if os.path.exists(pyw):
@@ -493,7 +500,7 @@ class Handler(SimpleHTTPRequestHandler):
             elif route == "/api/drag-start":
                 out = start_drag()
             elif route == "/api/metrics":
-                with open(os.path.join(APP_DIR, "data", "metrics.log"), "w", encoding="utf-8") as f:
+                with open(os.path.join(DATA_DIR, "metrics.log"), "w", encoding="utf-8") as f:
                     f.write(json.dumps(data))
                 out = {"ok": True}
             elif route == "/api/open-doc":
@@ -527,8 +534,8 @@ def serve():
     port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
-        os.makedirs(os.path.join(APP_DIR, "data"), exist_ok=True)
-        with open(os.path.join(APP_DIR, "data", "port.txt"), "w") as f:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(os.path.join(DATA_DIR, "port.txt"), "w") as f:
             f.write(str(port))
     except Exception:
         pass
@@ -539,7 +546,7 @@ def serve():
 def _life(msg):
     """轻量生命周期日志，方便排查「双击了没窗口」这类问题。"""
     try:
-        with open(os.path.join(APP_DIR, "data", "life.log"), "a", encoding="utf-8") as f:
+        with open(os.path.join(DATA_DIR, "life.log"), "a", encoding="utf-8") as f:
             f.write(time.strftime("%F %T ") + msg + "\n")
     except Exception:
         pass
@@ -1461,7 +1468,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        os.makedirs(os.path.join(APP_DIR, "data"), exist_ok=True)
-        with open(os.path.join(APP_DIR, "data", "crash.log"), "a", encoding="utf-8") as f:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(os.path.join(DATA_DIR, "crash.log"), "a", encoding="utf-8") as f:
             f.write(time.strftime("%F %T ") + traceback.format_exc() + "\n")
         raise

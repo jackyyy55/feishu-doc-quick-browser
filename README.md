@@ -34,6 +34,19 @@ python app.py
 
 Windows 下建议双击 `启动工作日志贴.vbs`（无命令行窗口静默启动）。
 
+### 打包成单文件 exe
+
+```bat
+pip install pyinstaller
+build_exe.bat            :: 产物：dist\飞书文档快速浏览器 v1.0.exe
+```
+
+打包后 `web/` 已内嵌进 exe，但 `config.json` 与 `data/`（登录态、缓存、日志）会在
+**exe 同级目录**自动生成，所以把 exe 放到一个独立文件夹里使用最干净：
+首次运行需在 iframe 里扫码登录一次飞书，之后登录态会保留。
+
+> 前提：系统需有 WebView2 运行时（Windows 11 自带；Win10 一般随 Edge 安装过）。
+
 ## 配置说明
 
 首次使用会生成 `config.json`：

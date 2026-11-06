@@ -6,3 +6,9 @@ __pycache__/
 
 # 个人配置（含自己的文档链接与标题缓存），仓库提供 config.example.json
 config.json
+
+# 打包产物
+build/
+dist/
+*.spec
+*.exe

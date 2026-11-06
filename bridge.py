@@ -13,7 +13,9 @@ import threading
 import time
 from html import unescape
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+# PyInstaller 打包后可写目录放 exe 旁边（资源目录无需用到）
+APP_DIR = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) \
+    else os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(APP_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
