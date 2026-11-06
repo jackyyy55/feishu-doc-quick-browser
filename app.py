@@ -251,23 +251,19 @@ def autostart_set(flag):
 class Core:
     def __init__(self):
         self.cfg = load_config()
-        self.model = bridge.load_cache()
         self.win = None
-        self._busy = False
         self._error = ""
 
     def state(self, **extra):
-        model = self.model or {}
         st = {
             "ok": True,
             "doc_url": self.cfg.get("doc_url", ""),
-            "doc_title": model.get("doc_title") or ("飞书文档" if self.cfg.get("doc_url") else ""),
-            # 已知标题缓存（域名+路径 → 标题）与最近打开过的文档
+            # 当前文档标题：从标题缓存按（域名+路径）取，由后台 _fetch_title_async 回填
+            "doc_title": (self.cfg.get("doc_titles") or {}).get(_title_key(self.cfg.get("doc_url", "")), "")
+                         if self.cfg.get("doc_url") else "",
+            # 已知标题缓存（域名+路径 → 标题）与打开过的文档（分页恢复用）
             "doc_titles": self.cfg.get("doc_titles", {}),
             "doc_recent": self.cfg.get("doc_recent", []),
-            "synced_at": model.get("synced_at"),
-            "groups": model.get("groups", []),
-            "stats": model.get("stats", {"today": 0, "total": 0, "groups": 0}),
             "on_top": self.cfg.get("on_top", True),
             "collapsed": self.cfg.get("collapsed", False),
             "alpha_in": int(self.cfg.get("alpha_in", 100)),
@@ -278,86 +274,10 @@ class Core:
             "dock_side": self.cfg.get("dock_side", ""),
             # 贴边缩进后露出条的 CSS 像素宽度（页面据此画拉手）
             "dock_strip": max(10, int(round(int(self.cfg.get("dock_px", 20)) / window_scale()))),
-            "busy": self._busy,
             "error": self._error,
         }
         st.update(extra)
         return st
-
-    def refresh(self, silent=False):
-        url = self.cfg.get("doc_url")
-        if not url:
-            return self.state(error="还没设置文档链接")
-        if self._busy:
-            return self.state()
-        self._busy = True
-        try:
-            res = bridge.fetch_doc(url)
-            if res.get("ok"):
-                self.model = res
-                self._error = ""
-            else:
-                self._error = res.get("error", "同步失败")
-        except Exception as e:  # noqa: BLE001
-            self._error = str(e)
-        finally:
-            self._busy = False
-        return self.state()
-
-    def set_doc(self, url):
-        url = (url or "").strip()
-        if not url:
-            return self.state(error="请填入飞书文档链接")
-        self.cfg["doc_url"] = url
-        save_config(self.cfg)
-        self.model = None
-        return self.refresh()
-
-    def save_text(self, block_id, text):
-        text = (text or "").strip()
-        if not text:
-            return self.state(error="内容不能为空")
-        if not self.cfg.get("doc_url") or not self.model:
-            return self.state(error="请先设置文档并同步")
-        res = bridge.update_block(self.cfg["doc_url"], self.model, block_id, text)
-        if not res.get("ok"):
-            return self.state(error=f"保存失败：{res.get('error')}")
-        for g in self.model.get("groups", []):
-            for it in g.get("items", []):
-                if it.get("id") == block_id:
-                    it["text"] = text
-        self.model["synced_at"] = int(time.time())
-        self._error = ""
-        threading.Thread(target=self.refresh, daemon=True).start()
-        return self.state()
-
-    def toggle(self, block_id, done):
-        if not self.cfg.get("doc_url") or not self.model:
-            return self.state(error="请先设置文档并同步")
-        target = None
-        for g in self.model.get("groups", []):
-            for it in g.get("items", []):
-                if it.get("id") == block_id:
-                    target = it
-        if not target:
-            return self.state(error="条目已失效，请刷新")
-        res = bridge.update_block(self.cfg["doc_url"], self.model, block_id, target["text"], done=done)
-        if not res.get("ok"):
-            return self.state(error=f"保存失败：{res.get('error')}")
-        target["done"] = done
-        self._error = ""
-        return self.state()
-
-    def add(self, text):
-        text = (text or "").strip()
-        if not text:
-            return self.state(error="内容不能为空")
-        if not self.cfg.get("doc_url") or not self.model:
-            return self.state(error="请先设置文档并同步")
-        res = bridge.add_entry(self.cfg["doc_url"], self.model, text)
-        if not res.get("ok"):
-            return self.state(error=f"新增失败：{res.get('error')}")
-        return self.refresh()
 
     # ---------------- 窗口行为
     def set_on_top(self, flag):
@@ -404,12 +324,6 @@ class Core:
         save_config(self.cfg)
         return self.state(error=err) if err else self.state()
 
-    def open_doc(self):
-        import webbrowser
-        if self.cfg.get("doc_url"):
-            webbrowser.open(self.cfg["doc_url"].strip())
-        return self.state()
-
     def close(self):
         self._persist_geometry()
         _tray_remove()
@@ -450,68 +364,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
-    def _send_file(self, path, mime=None):
-        import mimetypes
-        try:
-            with open(path, "rb") as f:
-                body = f.read()
-        except Exception:
-            return self._json({"ok": False, "error": "not found"}, 404)
-        mime = mime or mimetypes.guess_type(path)[0] or "application/octet-stream"
-        self.send_response(200)
-        self.send_header("Content-Type", mime)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "public, max-age=604800")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _serve_image(self):
-        from urllib.parse import urlparse, parse_qs, unquote
-        u = urlparse(self.path)
-        token = unquote(u.path[len("/api/img/"):]).strip()
-        want_thumb = (parse_qs(u.query).get("s") or ["thumb"])[0] != "full"
-        if not token:
-            return self._json({"ok": False, "error": "no token"}, 404)
-        mime = (parse_qs(u.query).get("m") or ["image/png"])[0]
-        try:
-            path = bridge.ensure_thumb(token, mime) if want_thumb else bridge.ensure_image(token, mime)
-        except Exception as e:  # noqa: BLE001
-            return self._json({"ok": False, "error": str(e)}, 500)
-        if not path:
-            return self._json({"ok": False, "error": "图片下载失败"}, 404)
-        return self._send_file(path)
-
     def do_GET(self):
-        if self.path.startswith("/api/img/"):
-            return self._serve_image()
-        if self.path.startswith("/api/probe"):
-            js = ("JSON.stringify({ih:innerHeight,iw:innerWidth,dpr:devicePixelRatio,"
-                  "strip:getComputedStyle(document.body).getPropertyValue('--strip'),"
-                  "db:document.getElementById('dockbar').getBoundingClientRect().toJSON(),"
-                  "gp:document.querySelector('.grip').getBoundingClientRect().toJSON(),"
-                  "hid:document.body.classList.contains('docked-hidden'),"
-                  "dsrc:(document.getElementById('doc')||{}).src||'',"
-                  "hl:(typeof docHist!=='undefined')?docHist.length:0,"
-                  "hi:(typeof docHi!=='undefined')?docHi:-1})")
-            try:
-                return self._json({"ok": True, "r": CORE.win.evaluate_js(js)})
-            except Exception as e:  # noqa: BLE001
-                return self._json({"ok": False, "error": str(e)})
         if self.path.startswith("/api/state"):
             return self._json(CORE.state())
-        if self.path.startswith("/api/test-newwin"):
-            # 临时：模拟文档里点了一个 target=_blank 的链接，验证新窗口拦截链路
-            # 可选 ?url=<链接> 指定目标，默认用当前文档
-            try:
-                from urllib.parse import urlparse, parse_qs
-                qs = parse_qs(urlparse(self.path).query)
-                u = (qs.get("url") or [CORE.cfg.get("doc_url", "")])[0]
-                js = ("const a=document.createElement('a');a.href=%s;a.target='_blank';"
-                      "document.body.appendChild(a);a.click();a.remove();" % json.dumps(u))
-                CORE.win.evaluate_js(js)
-                return self._json({"ok": True, "url": u})
-            except Exception as e:  # noqa: BLE001
-                return self._json({"ok": False, "error": str(e)})
         return super().do_GET()
 
     def do_POST(self):
@@ -524,16 +379,6 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             if route in ("/api/boot", "/api/state"):
                 out = CORE.state()
-            elif route == "/api/refresh":
-                out = CORE.refresh()
-            elif route == "/api/set-doc":
-                out = CORE.set_doc(data.get("url", ""))
-            elif route == "/api/save":
-                out = CORE.save_text(data.get("id"), data.get("text"))
-            elif route == "/api/toggle":
-                out = CORE.toggle(data.get("id"), bool(data.get("done")))
-            elif route == "/api/add":
-                out = CORE.add(data.get("text"))
             elif route == "/api/on-top":
                 out = CORE.set_on_top(bool(data.get("flag")))
             elif route == "/api/collapse":
@@ -544,12 +389,6 @@ class Handler(SimpleHTTPRequestHandler):
                 out = start_resize(data.get("edge", "bottomright"))
             elif route == "/api/drag-start":
                 out = start_drag()
-            elif route == "/api/metrics":
-                with open(os.path.join(DATA_DIR, "metrics.log"), "w", encoding="utf-8") as f:
-                    f.write(json.dumps(data))
-                out = {"ok": True}
-            elif route == "/api/open-doc":
-                out = CORE.open_doc()
             elif route == "/api/recent":
                 lst = data.get("list") or []
                 CORE.cfg["doc_recent"] = [str(u) for u in lst if isinstance(u, str)][-20:]
@@ -1390,9 +1229,8 @@ def _fetch_title_async(url):
 
     def run():
         try:
-            m = bridge.fetch_doc(url)
-            title = (m or {}).get("doc_title")
-            if m.get("ok") and title:
+            title = bridge.fetch_title(url)
+            if title:
                 CORE.cfg.setdefault("doc_titles", {})[_title_key(url)] = title
                 save_config(CORE.cfg)
                 try:
@@ -1494,7 +1332,6 @@ def main():
         window.events.shown += lambda: _life("窗口已显示")
     except Exception:
         pass
-    threading.Timer(1.0, lambda: CORE.refresh()).start()
     threading.Timer(4.0, lambda: _fetch_title_async(cfg.get("doc_url", ""))).start()
     threading.Thread(target=_polish_window, daemon=True).start()
     threading.Thread(target=_tray_loop, daemon=True).start()

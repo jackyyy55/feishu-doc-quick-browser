@@ -16,13 +16,13 @@
 - **托盘常驻**：不出现在任务栏和 Alt+Tab，只留托盘图标
   （左键 显示/隐藏，右键菜单含退出）
 - **开机自启**：设置里一键开关，写入当前用户注册表 Run 键，静默无窗口启动
-- **编辑直写**：编辑结果通过 lark CLI 写回飞书文档，与网页端能力一致
+- **后台标题**：打开过的文档自动抓取真实标题显示在顶栏和分页上（经 lark CLI）
 
 ## 运行环境
 
 - Windows 10 / 11
-- Python 3.10+
-- [飞书官方 lark CLI](https://github.com/larksuite/lark-cli)（文档读取/写回走它，需先登录）
+- Python 3.10+（仅源码运行需要；exe 无需 Python）
+- [飞书官方 lark CLI](https://github.com/larksuite/lark-cli)（仅用于后台抓取文档标题，需先登录；未安装时标题显示为文档 id，不影响使用）
 
 ## 安装与运行
 
@@ -31,8 +31,6 @@ pip install -r requirements.txt
 cp config.example.json config.json   # 填入你的飞书文档链接
 python app.py
 ```
-
-Windows 下建议双击 `启动工作日志贴.vbs`（无命令行窗口静默启动）。
 
 ### 打包成单文件 exe
 
@@ -66,8 +64,9 @@ build_exe.bat            :: 产物：dist\飞书文档快速浏览器 v1.0.exe
 
 ```
 app.py        主程序：无边框窗口、贴边动画、托盘、本地 HTTP 服务、设置
-bridge.py     飞书桥接：基于 lark CLI 读写文档（标题/待办/图片/缩略图）
+bridge.py     飞书桥接：基于 lark CLI 后台抓取文档标题
 web/          前端外壳：分页条、状态栏、设置面板（iframe 内嵌飞书文档页）
+probe.py      开发调试：拉取文档原始 XML 并打印（python probe.py <文档链接>）
 ```
 
 ## 隐私说明
