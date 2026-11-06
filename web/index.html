@@ -154,6 +154,26 @@
     background:#fff;color:var(--ink-3);font-size:12.5px;z-index:4;transition:opacity .25s;
   }
   #loading.hide{opacity:0;pointer-events:none;}
+  /* 首次运行：还没有配置文档链接时的引导页 */
+  #setup{
+    position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;background:#fff;z-index:5;padding:0 36px;text-align:center;
+  }
+  #setup.show{display:flex;}
+  #setup h3{margin:0;font-size:15px;color:var(--ink);}
+  #setup p{margin:0;font-size:12px;color:var(--ink-3);line-height:1.8;}
+  #setup .r{display:flex;gap:8px;width:100%;max-width:420px;}
+  #setup input{
+    flex:1;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+    font-size:12.5px;outline:none;color:var(--ink);
+  }
+  #setup input:focus{border-color:var(--accent);}
+  #setup button{
+    border:0;background:var(--accent);color:#fff;border-radius:8px;padding:8px 16px;
+    font-size:12.5px;cursor:pointer;white-space:nowrap;
+  }
+  #setup button:hover{filter:brightness(1.08);}
+  #setup .err{color:#d33;font-size:11.5px;min-height:16px;}
 </style>
 </head>
 <body>
@@ -177,6 +197,16 @@
     <div id="docwrap">
       <div id="views"></div>
       <div id="loading">正在加载飞书文档…</div>
+      <div id="setup">
+        <h3>欢迎使用飞书文档快速浏览</h3>
+        <p>粘贴一个飞书文档链接开始使用（docx / wiki 链接均可）<br>
+        首次使用会要求登录飞书，在下方窗口内扫码一次即可，之后自动保持登录</p>
+        <div class="r">
+          <input id="setup-url" type="text" placeholder="https://xxx.feishu.cn/docx/…" spellcheck="false">
+          <button id="setup-go">开始使用</button>
+        </div>
+        <div class="err" id="setup-err"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -378,7 +408,15 @@ window.renderState = function(state){
   if(state.dock_side) document.body.classList.add("docked-"+state.dock_side);
   else document.body.classList.remove("docked-hidden");
   banner(state.error || "");
-  loadDoc(state.doc_url);
+  const setupEl = $("#setup");
+  if(!state.doc_url){
+    // 首次运行：没有配置文档，显示引导页而不是永远"正在加载"
+    setupEl.classList.add("show");
+    $("#loading").classList.add("hide");
+  }else{
+    setupEl.classList.remove("show");
+    loadDoc(state.doc_url);
+  }
 };
 
 // ---- 设置面板（齿轮）：移入/移出透明度
@@ -442,6 +480,20 @@ $("#btn-refresh").onclick = () => {
   const t = TABS[tabAct];
   if(t){ $("#loading").classList.remove("hide"); t.ifr.src = t.url; }
 };
+
+// ---- 首次运行引导：粘贴文档链接保存
+function setupSave(){
+  const u = $("#setup-url").value.trim();
+  const err = $("#setup-err");
+  if(!/^https:\/\/([a-z0-9-]+\.)*(feishu\.cn|larksuite\.com)\//i.test(u)){
+    err.textContent = "请粘贴有效的飞书文档链接（feishu.cn / larksuite.com）";
+    return;
+  }
+  err.textContent = "";
+  call("/api/nav-doc", {url: u}).then(()=>loadDoc(u)).catch(()=>{ err.textContent = "保存失败，请重试"; });
+}
+$("#setup-go").onclick = setupSave;
+$("#setup-url").addEventListener("keydown", (e)=>{ if(e.key === "Enter") setupSave(); });
 $("#btn-top").onclick = async ()=>{ renderState(await call("/api/on-top", {flag: !(S&&S.on_top)})); };
 $("#btn-collapse").onclick = async ()=>{ renderState(await call("/api/collapse", {flag: !(S&&S.collapsed)})); };
 $("#btn-close").onclick = ()=> call("/api/close");

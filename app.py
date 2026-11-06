@@ -216,7 +216,7 @@ class Core:
         st = {
             "ok": True,
             "doc_url": self.cfg.get("doc_url", ""),
-            "doc_title": model.get("doc_title", "工作日志"),
+            "doc_title": model.get("doc_title") or ("飞书文档" if self.cfg.get("doc_url") else ""),
             # 已知标题缓存（域名+路径 → 标题）与最近打开过的文档
             "doc_titles": self.cfg.get("doc_titles", {}),
             "doc_recent": self.cfg.get("doc_recent", []),
